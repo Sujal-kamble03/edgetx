@@ -1020,6 +1020,7 @@ bool isExternalModuleAvailable(int moduleType)
     case MODULE_TYPE_NONE:
     case MODULE_TYPE_CROSSFIRE:
     case MODULE_TYPE_GHOST:
+    case MODULE_TYPE_RAW_UART:
       break;
     default:
       return false;

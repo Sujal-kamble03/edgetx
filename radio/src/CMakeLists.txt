@@ -501,6 +501,7 @@ set(SRC
   model_audio.cpp
   pdm_wav_recorder.cpp
   sbus.cpp
+  pulses/raw_uart.cpp
   input_mapping.cpp
   inactivity_timer.cpp
   tasks/mixer_task.cpp

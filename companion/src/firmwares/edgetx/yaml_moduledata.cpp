@@ -83,6 +83,7 @@ static const YamlLookupTable protocolLut = {
   {  PULSES_FLYSKY_AFHDS2A, "TYPE_FLYSKY_AFHDS2A"  },
   {  PULSES_FLYSKY_AFHDS3, "TYPE_FLYSKY_AFHDS3"  },
   {  PULSES_LEMON_DSMP, "TYPE_LEMON_DSMP"  },
+  {  PULSES_RAW_UART, "TYPE_RAW_UART"  },
 };
 
 static const YamlLookupTable oldprotocolLut = {

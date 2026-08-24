@@ -31,6 +31,7 @@
 
 #include "pulses/pxx2.h"
 #include "pulses/flysky.h"
+#include "pulses/raw_uart.h"
 
 #if defined(DSM2)
 #include "pulses/dsm2.h"
@@ -351,6 +352,10 @@ uint8_t getRequiredProtocol(uint8_t module)
     case MODULE_TYPE_LEMON_DSMP:
       protocol = PROTOCOL_CHANNELS_DSMP;
       break;
+
+    case MODULE_TYPE_RAW_UART:
+      protocol = PROTOCOL_CHANNELS_RAW_UART;
+      break;
       
     default:
       protocol = PROTOCOL_CHANNELS_NONE;
@@ -491,6 +496,10 @@ static void pulsesEnableModule(uint8_t module, uint8_t protocol)
       _init_module(module, &DSMPDriver);
       break;
 #endif
+
+    case PROTOCOL_CHANNELS_RAW_UART:
+      _init_module(module, &RawUartDriver);
+      break;
 
     default:
       break;

@@ -425,6 +425,7 @@ int ModuleData::getTypeFromProtocol(unsigned int protocol)
                           { PULSES_FLYSKY_AFHDS3,       MODULE_TYPE_FLYSKY_AFHDS3 },
 
                           { PULSES_LEMON_DSMP,          MODULE_TYPE_LEMON_DSMP },
+                          { PULSES_RAW_UART,            MODULE_TYPE_RAW_UART },
                       };
 
   QPair<int, int>elmt;
@@ -470,6 +471,7 @@ QString ModuleData::typeToString(int type)
     "Flysky AFHDS2A",
     "Flysky AFHDS3",
     "Lemon-Rx DSMP",
+    "RAW UART",
   };
 
   return CHECK_IN_ARRAY(strings, type);
@@ -505,7 +507,8 @@ bool ModuleData::isProtocolAvailable(int moduleidx, unsigned int protocol, Gener
       const int moduleType = getTypeFromProtocol(protocol);
 
       if (IS_IFLIGHT_C14(getCurrentBoard()))
-        return moduleType == MODULE_TYPE_CROSSFIRE || moduleType == MODULE_TYPE_GHOST;
+        return moduleType == MODULE_TYPE_CROSSFIRE || moduleType == MODULE_TYPE_GHOST ||
+               moduleType == MODULE_TYPE_RAW_UART;
 
       switch(moduleSize) {
         case Board::EXTMODSIZE_NONE:
@@ -529,6 +532,7 @@ bool ModuleData::isProtocolAvailable(int moduleidx, unsigned int protocol, Gener
             case MODULE_TYPE_XJT_LITE_PXX2:
             case MODULE_TYPE_PPM:
             case MODULE_TYPE_SBUS:
+            case MODULE_TYPE_RAW_UART:
               return true;
             default:
               return false;
@@ -548,6 +552,7 @@ bool ModuleData::isProtocolAvailable(int moduleidx, unsigned int protocol, Gener
             case MODULE_TYPE_LEMON_DSMP:
             case MODULE_TYPE_PPM:
             case MODULE_TYPE_SBUS:
+            case MODULE_TYPE_RAW_UART:
               return true;
             default:
               return false;
