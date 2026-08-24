@@ -40,6 +40,12 @@ int bluetoothRead(uint8_t* data);
 uint8_t bluetoothIsWriting();
 void bluetoothDisable();
 
+bool bluetoothRawUartInit(uint32_t baudrate);
+void bluetoothRawUartDeInit();
+void bluetoothRawUartSend(const void* buffer, uint32_t length);
+bool bluetoothRawUartTxCompleted();
+bool bluetoothRawUartIsActive();
+
 #if defined(PCBX9LITES) || defined(PCBX7ACCESS)
   #define IS_BLUETOOTH_CHIP_PRESENT()     (true)
 #elif defined(PCBX9LITE)

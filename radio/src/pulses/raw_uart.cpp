@@ -10,6 +10,9 @@
 #include "hal/module_port.h"
 #include "mixer_scheduler.h"
 #include "pulses/pulses.h"
+#if defined(RADIO_BOXER) && defined(BLUETOOTH)
+#include "bluetooth_driver.h"
+#endif
 
 #define RAW_UART_BAUDRATE 115200
 #define RAW_UART_FRAME_MARKER 0xA5
@@ -23,8 +26,19 @@ static const etx_serial_init rawUartParams = {
   .polarity = ETX_Pol_Normal,
 };
 
+#if defined(RADIO_BOXER) && defined(BLUETOOTH)
+static uint8_t rawUartContext;
+static uint8_t rawUartModule;
+#endif
+
 static void* rawUartInit(uint8_t module)
 {
+#if defined(RADIO_BOXER) && defined(BLUETOOTH)
+  rawUartModule = module;
+  if (!bluetoothRawUartInit(RAW_UART_BAUDRATE)) return nullptr;
+  mixerSchedulerSetPeriod(module, RAW_UART_PERIOD);
+  return &rawUartContext;
+#else
 #if defined(HARDWARE_INTERNAL_MODULE)
   if (module == INTERNAL_MODULE) return nullptr;
 #endif
@@ -35,20 +49,32 @@ static void* rawUartInit(uint8_t module)
 
   mixerSchedulerSetPeriod(module, RAW_UART_PERIOD);
   return mod_st;
+#endif
 }
 
 static void rawUartDeInit(void* ctx)
 {
+#if defined(RADIO_BOXER) && defined(BLUETOOTH)
+  (void)ctx;
+  bluetoothRawUartDeInit();
+#else
   modulePortDeInit((etx_module_state_t*)ctx);
+#endif
 }
 
 static void rawUartSendPulses(void* ctx, uint8_t* buffer, int16_t*, uint8_t)
 {
+#if defined(RADIO_BOXER) && defined(BLUETOOTH)
+  (void)ctx;
+  auto module = rawUartModule;
+  auto p_buf = buffer;
+#else
   auto mod_st = (etx_module_state_t*)ctx;
   auto module = modulePortGetModule(mod_st);
   auto drv = modulePortGetSerialDrv(mod_st->tx);
   auto drv_ctx = modulePortGetCtx(mod_st->tx);
   auto p_buf = buffer;
+#endif
 
   *p_buf++ = RAW_UART_FRAME_MARKER;
   uint8_t start = g_model.moduleData[module].channelsStart;
@@ -59,7 +85,21 @@ static void rawUartSendPulses(void* ctx, uint8_t* buffer, int16_t*, uint8_t)
     *p_buf++ = (uint8_t)(value >> 8);
   }
 
+#if defined(RADIO_BOXER) && defined(BLUETOOTH)
+  bluetoothRawUartSend(buffer, p_buf - buffer);
+#else
   drv->sendBuffer(drv_ctx, buffer, p_buf - buffer);
+#endif
+}
+
+static bool rawUartTxCompleted(void* ctx)
+{
+#if defined(RADIO_BOXER) && defined(BLUETOOTH)
+  (void)ctx;
+  return bluetoothRawUartTxCompleted();
+#else
+  return modulePortSerialTxCompleted(ctx);
+#endif
 }
 
 const etx_proto_driver_t RawUartDriver = {
@@ -70,5 +110,5 @@ const etx_proto_driver_t RawUartDriver = {
   .processData = nullptr,
   .processFrame = nullptr,
   .onConfigChange = nullptr,
-  .txCompleted = modulePortSerialTxCompleted,
+  .txCompleted = rawUartTxCompleted,
 };

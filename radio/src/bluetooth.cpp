@@ -391,6 +391,8 @@ void Bluetooth::wakeup(void)
 #else // PCBX9E
 void Bluetooth::wakeup()
 {
+  if (bluetoothRawUartIsActive()) return;
+
   if (state != BLUETOOTH_STATE_OFF) {
     if (bluetoothIsWriting()) {
       return;

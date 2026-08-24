@@ -99,6 +99,50 @@ void bluetoothDisable()
   }
 }
 
+bool bluetoothRawUartInit(uint32_t baudrate)
+{
+  bluetoothDisable();
+
+  etx_serial_init cfg = {
+    .baudrate = baudrate,
+    .encoding = ETX_Encoding_8N1,
+    .direction = ETX_Dir_TX,
+    .polarity = ETX_Pol_Normal,
+  };
+
+  auto hw_def = REF_STM32_SERIAL_PORT(BTModule);
+  _bt_usart_ctx = STM32SerialDriver.init(hw_def, &cfg);
+  if (!_bt_usart_ctx) return false;
+
+#if defined(BT_EN_GPIO)
+  gpio_write(BT_EN_GPIO, 0);
+#endif
+#if defined(BT_PWR_GPIO)
+  gpio_set(BT_PWR_GPIO);
+#endif
+  return true;
+}
+
+void bluetoothRawUartDeInit()
+{
+  bluetoothDisable();
+}
+
+void bluetoothRawUartSend(const void* buffer, uint32_t length)
+{
+  bluetoothWrite(buffer, length);
+}
+
+bool bluetoothRawUartTxCompleted()
+{
+  return !bluetoothIsWriting();
+}
+
+bool bluetoothRawUartIsActive()
+{
+  return _bt_usart_ctx != nullptr;
+}
+
 void bluetoothWrite(const void* buffer, uint32_t len)
 {
   if (!_bt_usart_ctx) return;
