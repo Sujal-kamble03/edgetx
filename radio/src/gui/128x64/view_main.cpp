@@ -334,13 +334,19 @@ enum DashboardDirection : uint8_t {
 
 void drawCustomMainDashboard()
 {
-  // These placeholders are the future live-data integration points.
-  const bool armed = true;
-  const char* driveText = "READY";
-  const char* modeText = "MU";
+  const int8_t sa = switchGetIndexFromName("SA");
+  const int8_t sc = switchGetIndexFromName("SC");
+  const int8_t sd = switchGetIndexFromName("SD");
+  const int8_t se = switchGetIndexFromName("SE");
+
+  const bool armed = sa >= 0 && switchGetPosition(sa) == SWITCH_HW_UP;
+  const char* driveText =
+      sd >= 0 && switchGetPosition(sd) == SWITCH_HW_UP ? "RDY" : "NORDY";
+  const char* modeText =
+      se >= 0 && switchGetPosition(se) == SWITCH_HW_UP ? "CSU" : "MU";
   const uint8_t speed = 8;
   const uint8_t spool = 1;
-  const bool dfOn = true;
+  const bool dfOn = sc >= 0 && switchGetPosition(sc) == SWITCH_HW_DOWN;
   const DashboardDirection direction = DASHBOARD_FORWARD;
   const bool linked = true;
 
