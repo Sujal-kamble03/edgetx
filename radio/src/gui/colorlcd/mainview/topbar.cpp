@@ -124,6 +124,10 @@ TopBar::TopBar(Window * parent) :
   setWindowFlag(NO_FOCUS);
   etx_solid_bg(lvobj, COLOR_THEME_SECONDARY1_INDEX);
 
+  new StaticText(this, {LCD_W / 2 - LAYOUT_SCALE(50), 0, LAYOUT_SCALE(100),
+                        EdgeTxStyles::MENU_HEADER_HEIGHT},
+                 "S3C2MU", COLOR_THEME_PRIMARY2_INDEX, CENTERED);
+
   headerIcon = new HeaderIcon(parent, ICON_EDGETX, [=]() { QuickMenu::openQuickMenu(); });
 }
 

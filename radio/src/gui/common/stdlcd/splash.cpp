@@ -49,17 +49,25 @@ void waitSplash()
 
     getADC(); // init ADC array
 
+#if !defined(RADIO_BOXER)
     inactivityCheckInputs();
+#endif
 
+#if defined(RADIO_BOXER)
+    tmr10ms_t tgtime = get_tmr10ms() + 200;
+#else
     tmr10ms_t tgtime = get_tmr10ms() + SPLASH_TIMEOUT;
+#endif
 
     while (tgtime > get_tmr10ms()) {
       sleep_ms(1);
 
       getADC();
 
+    #if !defined(RADIO_BOXER)
       if (getEvent() || inactivityCheckInputs())
         return;
+    #endif
 
 #if defined(PWR_BUTTON_PRESS)
       uint32_t pwr_check = pwrCheck();

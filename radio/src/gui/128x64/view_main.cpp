@@ -586,6 +586,10 @@ void menuMainView(event_t event)
     // Model Name
     drawModelName(MODELNAME_X, MODELNAME_Y, g_model.header.name, g_eeGeneral.currModel, BIGSIZE);
 
+  #if defined(RADIO_BOXER)
+    lcdDrawText(LCD_W / 2, MODELNAME_Y, "S3C2MU", CENTERED | SMLSIZE);
+  #endif
+
     // Main Voltage (or alarm if any)
     displayVoltageOrAlarm();
 

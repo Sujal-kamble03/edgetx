@@ -46,38 +46,29 @@ const uint8_t __bmp_splash_logo[] __FLASH = {
 #include "bmp_logo_edgetx_splash.lbm"
 };
 
+const uint8_t __bmp_company_logo[] __FLASH = {
+#include "bmp_company_logo.lbm"
+};
+
 static Window* splashScreen = nullptr;
+static constexpr tmr10ms_t COMPANY_SPLASH_DURATION = 200;
 
 void drawSplash()
 {
-  if (!sdMounted()) sdInit();
-
   splashScreen = new Window(MainWindow::instance(), {0, 0, LCD_W, LCD_H});
   lv_obj_set_parent(splashScreen->getLvObj(), lv_layer_top());
 
   etx_solid_bg(splashScreen->getLvObj(), COLOR_BLACK_INDEX);
 
-  auto bg = new StaticImage(splashScreen, {0, 0, LCD_W, LCD_H},
-                            BITMAPS_PATH "/" SPLASH_FILE);
-  bg->show(bg->hasImage());
+  LZ4Bitmap* logo = (LZ4Bitmap*)__bmp_company_logo;
+  coord_t x = (LANDSCAPE ? LCD_W / 2 : LCD_W / 2) - logo->width / 2;
+  coord_t y = (LANDSCAPE ? LCD_H / 2 : LCD_H / 2) - logo->height / 2;
+  new StaticLZ4Image(splashScreen, x, y, logo);
 
-  if (!bg->hasImage()) {
-    LZ4Bitmap* logo = (LZ4Bitmap*)__bmp_splash_logo;
-    coord_t x = (LANDSCAPE ? LCD_W / 3 : LCD_W / 2) - logo->width / 2;
-    coord_t y = (LANDSCAPE ? LCD_H / 2 : LCD_H * 2 / 5) - logo->height / 2;
-    new StaticLZ4Image(splashScreen, x, y, logo);
-
-    coord_t w = LAYOUT_SCALE(200);
-    x = (LANDSCAPE ? LCD_W * 4 / 5 : LCD_W / 2) - w / 2;
-    y = LCD_H - EdgeTxStyles::STD_FONT_HEIGHT * 4;
-    new StaticText(splashScreen, {x, y, w, EdgeTxStyles::STD_FONT_HEIGHT}, ver_str.c_str(), COLOR_GREY_INDEX, CENTERED);
-    new StaticText(splashScreen, {x, y + EdgeTxStyles::STD_FONT_HEIGHT, w, EdgeTxStyles::STD_FONT_HEIGHT},
-                   nam_str.c_str(), COLOR_GREY_INDEX, CENTERED);
-#if !defined(VERSION_TAG)
-    new StaticText(splashScreen, {x, y + EdgeTxStyles::STD_FONT_HEIGHT * 2, w, EdgeTxStyles::STD_FONT_HEIGHT},
-                   git_str.c_str(), COLOR_GREY_INDEX, CENTERED);
-#endif
-  }
+  coord_t w = LCD_W;
+  coord_t productY = LCD_H - EdgeTxStyles::STD_FONT_HEIGHT * 2 - 12;
+  new StaticText(splashScreen, {0, productY, w, EdgeTxStyles::STD_FONT_HEIGHT * 2},
+                 "S3C2MU", COLOR_WHITE_INDEX, FONT(XL) | CENTERED);
 
   // Refresh to show splash screen
   MainWindow::instance()->run();
@@ -89,7 +80,7 @@ static bool splashRunning = false;
 void startSplash()
 {
   if (!UNEXPECTED_SHUTDOWN()) {
-    splashStartTime = get_tmr10ms();
+    splashStartTime = get_tmr10ms() + COMPANY_SPLASH_DURATION;
     splashRunning = true;
     drawSplash();
   }
@@ -108,9 +99,6 @@ void waitSplash()
 {
   // Handle color splash screen
   if (splashRunning) {
-    inactivityCheckInputs();
-    splashStartTime += SPLASH_TIMEOUT;
-
 #if defined(PWR_BUTTON_DUAL)
     // Wait for dual power buttons to be released
     while (pwrPressed()) {
@@ -123,14 +111,7 @@ void waitSplash()
 #endif
 
     MainWindow::instance()->blockUntilClose(true, [=]() {
-      if (splashStartTime < get_tmr10ms())
-        return true;
-      auto evt = getEvent();
-      if (evt || inactivityCheckInputs()) {
-        if (evt) killEvents(evt);
-        return true;
-      }
-      return false;
+      return splashStartTime < get_tmr10ms();
     });
 
     // Reset timer so special/global functions set to !1x don't get triggered
