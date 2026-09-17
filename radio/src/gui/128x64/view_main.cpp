@@ -299,6 +299,124 @@ void displayBattVoltage()
 #endif
 }
 
+static const uint16_t LINK_DOT[] = {0x0E, 0x1F, 0x1F, 0x1F, 0x0E};
+static const uint16_t ARROW_UP[] = {0x08, 0x1C, 0x3E, 0x7F, 0x08, 0x08, 0x08};
+static const uint16_t ARROW_DOWN[] = {0x08, 0x08, 0x08, 0x7F, 0x3E, 0x1C, 0x08};
+static const uint16_t ARROW_LEFT[] = {0x08, 0x10, 0x20, 0x7F, 0x20, 0x10, 0x08};
+static const uint16_t ARROW_RIGHT[] = {0x08, 0x04, 0x02, 0x7F, 0x02, 0x04, 0x08};
+static const uint16_t ROTATE_CCW[] = {
+    0x028, 0x0E4, 0x3E2, 0x0E1, 0x021, 0x401,
+    0x401, 0x401, 0x202, 0x104, 0x0F8};
+static const uint16_t ROTATE_CW[] = {
+    0x0A0, 0x138, 0x23E, 0x438, 0x420, 0x401,
+    0x401, 0x401, 0x202, 0x104, 0x0F8};
+
+static void drawDashboardBits(coord_t x, coord_t y, const uint16_t* rows,
+                              uint8_t width, uint8_t height, bool erase = false)
+{
+  const LcdFlags flags = erase ? ERASE : FORCE;
+  for (uint8_t row = 0; row < height; row++) {
+    for (uint8_t column = 0; column < width; column++) {
+      if (rows[row] & (1u << (width - 1 - column)))
+        lcdDrawPoint(x + column, y + row, flags);
+    }
+  }
+}
+
+enum DashboardDirection : uint8_t {
+  DASHBOARD_FORWARD,
+  DASHBOARD_LEFT,
+  DASHBOARD_RIGHT,
+  DASHBOARD_BACK,
+  DASHBOARD_CCW,
+  DASHBOARD_CW,
+};
+
+void drawCustomMainDashboard()
+{
+  // These placeholders are the future live-data integration points.
+  const bool armed = true;
+  const char* driveText = "READY";
+  const char* modeText = "MU";
+  const uint8_t speed = 8;
+  const uint8_t spool = 1;
+  const bool dfOn = true;
+  const DashboardDirection direction = DASHBOARD_FORWARD;
+  const bool linked = true;
+
+  lcdDrawText(1, 0, "S3C2MU");
+  if (linked) drawDashboardBits(40, 2, LINK_DOT, 5, 5);
+  lcdDrawText(48, 0, linked ? "CON" : "---");
+
+  lcdDrawRect(87, 1, 16, 8);
+  lcdDrawSolidFilledRect(103, 3, 2, 4);
+  lcdDrawSolidFilledRect(89, 3, GET_TXBATT_BARS(10), 4);
+  lcdDrawNumber(120, 0, GET_TXBATT_BARS(100), RIGHT);
+  lcdDrawChar(122, 0, '%');
+
+  lcdDrawSolidHorizontalLine(0, 9, LCD_W);
+  lcdDrawSolidVerticalLine(64, 10, LCD_H - 10);
+
+  if (armed) lcdDrawSolidFilledRect(1, 11, 62, 11);
+  lcdDrawText(32, 13, armed ? "ARMED" : "DISARM", CENTERED | (armed ? INVERS : 0));
+
+  lcdDrawText(2, 26, "DRV");
+  lcdDrawText(32, 26, driveText);
+  lcdDrawText(2, 36, "MODE");
+  lcdDrawText(50, 36, modeText);
+
+  lcdDrawText(2, 46, "SPD");
+  for (uint8_t index = 0; index < 10; index++) {
+    coord_t x = 22 + index * 4;
+    if (index < speed)
+      lcdDrawSolidFilledRect(x, 45, 3, 7);
+    else {
+      lcdDrawSolidHorizontalLine(x, 45, 3);
+      lcdDrawSolidHorizontalLine(x, 51, 3);
+    }
+  }
+
+  lcdDrawText(2, 55, "DF");
+  if (dfOn) {
+    lcdDrawSolidFilledRect(40, 53, 23, 11);
+    lcdDrawText(51, 55, "ON", CENTERED | INVERS);
+  } else {
+    lcdDrawRect(40, 53, 23, 11);
+    lcdDrawText(51, 55, "OFF", CENTERED);
+  }
+
+  static const coord_t columns[] = {75, 88, 101};
+  static const coord_t rows[] = {12, 25, 38};
+  static const uint8_t sizes[] = {7, 7, 7, 7, 11, 11};
+  static const uint8_t cellColumns[] = {1, 0, 2, 1, 0, 2};
+  static const uint8_t cellRows[] = {0, 1, 1, 2, 2, 2};
+  static const uint16_t* glyphs[] = {
+      ARROW_UP, ARROW_LEFT, ARROW_RIGHT, ARROW_DOWN, ROTATE_CCW, ROTATE_CW};
+
+  for (uint8_t index = 0; index < 6; index++) {
+    coord_t cellX = columns[cellColumns[index]];
+    coord_t cellY = rows[cellRows[index]];
+    uint8_t size = sizes[index];
+    bool active = index == direction;
+    if (active) lcdDrawSolidFilledRect(cellX, cellY, 12, 12);
+    drawDashboardBits(cellX + (12 - size) / 2, cellY + (12 - size) / 2,
+                      glyphs[index], size, size, active);
+  }
+  lcdDrawSolidFilledRect(94, 31, 2, 2);
+
+  lcdDrawText(66, 55, "SP");
+  static const char* const spoolNames[] = {"S1", "S2", "S3"};
+  for (uint8_t index = 0; index < 3; index++) {
+    coord_t x = 80 + index * 14;
+    if (index == spool) {
+      lcdDrawSolidFilledRect(x - 1, 53, 12, 11);
+      lcdDrawText(x, 55, spoolNames[index], INVERS);
+    } else {
+      lcdDrawText(x, 55, spoolNames[index]);
+    }
+  }
+}
+
 #define displayVoltageOrAlarm() displayBattVoltage()
 
 void onMainViewMenu(const char * result)
@@ -450,12 +568,20 @@ void menuMainView(event_t event)
       break;
   }
 
+  drawCustomMainDashboard();
+  return;
+
   switch (view_base) {
     case VIEW_CHAN_MONITOR:
       menuChannelsViewCommon(event);
       break;
 
     case VIEW_OUTPUTS_VALUES:
+      if (view == VIEW_OUTPUTS_VALUES) {
+        drawCustomMainDashboard();
+        break;
+      }
+      [[fallthrough]];
     case VIEW_OUTPUTS_BARS:
       // scroll bar
       lcdDrawHorizontalLine(38, 34, 54, DOTTED);
@@ -512,53 +638,7 @@ void menuMainView(event_t event)
 
     case VIEW_INPUTS:
       if (view == VIEW_INPUTS) {
-        // Sticks + Pots
-        doMainScreenGraphics();
-        
-        // Switches
-        // -> 2 columns: one for each side
-        // -> 4 slots on each side
-        uint8_t maxSwitch = 0;
-        uint8_t leftMaxRow = 0;
-        uint8_t rightMaxRow = 0;
-        for (uint8_t n = 0; n < switchGetMaxSwitches(); n += 1)
-            if (SWITCH_EXISTS(n) && !switchIsFlex(n) && !switchIsCustomSwitch(n)) {
-              auto switch_display = switchGetDisplayPosition(n);
-              if (switch_display.col) {
-                if (switch_display.row > rightMaxRow)
-                  rightMaxRow = switch_display.row;
-              } else {
-                if (switch_display.row > leftMaxRow)
-                  leftMaxRow = switch_display.row;
-              }
-              maxSwitch = n + 1;
-            }
-
-        if (leftMaxRow < 3 && rightMaxRow < 3) {
-          for (int i = 0; i < maxSwitch; ++i) {
-            if (SWITCH_EXISTS(i) && !switchIsFlex(i) && !switchIsCustomSwitch(i)) {
-              auto switch_display = switchGetDisplayPosition(i);
-              coord_t x = switch_display.col == 0 ? 3 * FW + 3 : 18 * FW + 1;
-              coord_t y = 33 + switch_display.row * FH;
-              getvalue_t val = getValue(MIXSRC_FIRST_SWITCH + i);
-              if (val == 0) x -= 1;
-              getvalue_t sw =
-                  ((val < 0) ? 3 * i + 1
-                              : ((val == 0) ? 3 * i + 2 : 3 * i + 3));
-              drawSwitch(x, y, sw, CENTERED, false);
-            }
-          }
-        }
-        else {
-          for (int i = 0; i < maxSwitch; ++i) {
-            if (SWITCH_EXISTS(i) && !switchIsFlex(i) && !switchIsCustomSwitch(i)) {
-              auto switch_display = switchGetDisplayPosition(i);
-              coord_t x = (switch_display.col == 0 ? 8 : 96) + switch_display.row * 5;
-              if (maxSwitch < 9) x += 3;
-              drawSmallSwitch(x, 5 * FH + 1, 4, i);
-            }
-          }
-        }
+        drawCustomMainDashboard();
       }
       else {
         // Logical Switches
@@ -578,7 +658,8 @@ void menuMainView(event_t event)
       break;
   }
 
-  if (view_base != VIEW_CHAN_MONITOR) {
+  if (view_base != VIEW_CHAN_MONITOR && view != VIEW_INPUTS &&
+      view != VIEW_OUTPUTS_VALUES) {
     // Flight Mode Name
     uint8_t mode = mixerCurrentFlightMode;
     lcdDrawSizedText(PHASE_X, PHASE_Y, g_model.flightModeData[mode].name, sizeof(g_model.flightModeData[mode].name));
