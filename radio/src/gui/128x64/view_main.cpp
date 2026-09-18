@@ -338,16 +338,36 @@ void drawCustomMainDashboard()
   const int8_t sc = switchGetIndexFromName("SC");
   const int8_t sd = switchGetIndexFromName("SD");
   const int8_t se = switchGetIndexFromName("SE");
+  const int8_t sb = switchGetIndexFromName("SB");
 
   const bool armed = sa >= 0 && switchGetPosition(sa) == SWITCH_HW_UP;
-  const char* driveText =
-      sd >= 0 && switchGetPosition(sd) == SWITCH_HW_UP ? "RDY" : "NORDY";
+  const bool driveReady = sd >= 0 && switchGetPosition(sd) == SWITCH_HW_UP;
+  const bool csuMode = se >= 0 && switchGetPosition(se) == SWITCH_HW_UP;
+  const char* driveText = driveReady ? "  RDY" : "NORDY";
   const char* modeText =
-      se >= 0 && switchGetPosition(se) == SWITCH_HW_UP ? "CSU" : "MU";
-  const uint8_t speed = 8;
-  const uint8_t spool = 1;
-  const bool dfOn = sc >= 0 && switchGetPosition(sc) == SWITCH_HW_DOWN;
-  const DashboardDirection direction = DASHBOARD_FORWARD;
+      csuMode ? "CSU" : "MU";
+  const uint8_t speed = (getValue(MIXSRC_FIRST_POT + 1) + 1024) * 10 / 2048;
+  const uint8_t spool = sc >= 0 ? switchGetPosition(sc) : 1;
+  const bool dfOn = !csuMode && sc >= 0 && switchGetPosition(sc) == SWITCH_HW_DOWN;
+  const SwitchHwPos sbPosition = sb >= 0 ? switchGetPosition(sb) : SWITCH_HW_MID;
+  const int ele = getValue(MIXSRC_FIRST_STICK + 1);
+    const int ail = getValue(MIXSRC_FIRST_STICK + 3);
+  const bool muReadySbHigh = !csuMode && driveReady &&
+      sbPosition == SWITCH_HW_UP;
+    const bool muReadySbLow = !csuMode && driveReady &&
+      sbPosition == SWITCH_HW_DOWN;
+      const bool muReadyScLow = !csuMode && driveReady && sc >= 0 &&
+        switchGetPosition(sc) == SWITCH_HW_DOWN;
+  const DashboardDirection direction =
+      muReadySbHigh && ele > 15 ? DASHBOARD_FORWARD :
+      muReadySbHigh && ele < -15 ? DASHBOARD_BACK :
+        muReadyScLow && ele > 15 ? DASHBOARD_CW :
+        muReadyScLow && ele < -15 ? DASHBOARD_CCW :
+      muReadySbLow && ail > 15 ? DASHBOARD_RIGHT : DASHBOARD_LEFT;
+    const bool directionalBox =
+      (muReadySbHigh && (ele > 15 || ele < -15)) ||
+        (muReadyScLow && (ele > 15 || ele < -15)) ||
+      (!muReadyScLow && muReadySbLow && (ail > 15 || ail < -15));
   const bool linked = true;
 
   lcdDrawText(1, 0, "S3C2MU");
@@ -367,9 +387,10 @@ void drawCustomMainDashboard()
   lcdDrawText(32, 13, armed ? "ARMED" : "DISARM", CENTERED | (armed ? INVERS : 0));
 
   lcdDrawText(2, 26, "DRV");
-  lcdDrawText(32, 26, driveText);
+  if (driveReady) lcdDrawSolidFilledRect(30, 24, 33, 11);
+  lcdDrawText(32, 26, driveText, driveReady ? INVERS : 0);
   lcdDrawText(2, 36, "MODE");
-  lcdDrawText(50, 36, modeText);
+  lcdDrawText(41, 36, modeText);
 
   lcdDrawText(2, 46, "SPD");
   for (uint8_t index = 0; index < 10; index++) {
@@ -391,8 +412,8 @@ void drawCustomMainDashboard()
     lcdDrawText(51, 55, "OFF", CENTERED);
   }
 
-  static const coord_t columns[] = {75, 88, 101};
-  static const coord_t rows[] = {12, 25, 38};
+  static const coord_t columns[] = {76, 89, 102};
+  static const coord_t rows[] = {13, 26, 39};
   static const uint8_t sizes[] = {7, 7, 7, 7, 11, 11};
   static const uint8_t cellColumns[] = {1, 0, 2, 1, 0, 2};
   static const uint8_t cellRows[] = {0, 1, 1, 2, 2, 2};
@@ -403,23 +424,37 @@ void drawCustomMainDashboard()
     coord_t cellX = columns[cellColumns[index]];
     coord_t cellY = rows[cellRows[index]];
     uint8_t size = sizes[index];
-    bool active = index == direction;
+    const bool verticalBox = muReadySbHigh &&
+        (index == DASHBOARD_FORWARD || index == DASHBOARD_BACK);
+    const bool lowNeutralBox = muReadySbLow && !directionalBox &&
+      !muReadyScLow && (index == DASHBOARD_LEFT || index == DASHBOARD_RIGHT);
+    const bool rotateBox = muReadyScLow && !directionalBox &&
+        (index == DASHBOARD_CCW || index == DASHBOARD_CW);
+    const bool pairedBox =
+        (verticalBox || lowNeutralBox || rotateBox) && !directionalBox;
+    const bool active = directionalBox ? index == direction
+                       : pairedBox && BLINK_ON_PHASE;
     if (active) lcdDrawSolidFilledRect(cellX, cellY, 12, 12);
     drawDashboardBits(cellX + (12 - size) / 2, cellY + (12 - size) / 2,
                       glyphs[index], size, size, active);
   }
   lcdDrawSolidFilledRect(94, 31, 2, 2);
 
-  lcdDrawText(66, 55, "SP");
   static const char* const spoolNames[] = {"S1", "S2", "S3"};
-  for (uint8_t index = 0; index < 3; index++) {
-    coord_t x = 80 + index * 14;
-    if (index == spool) {
-      lcdDrawSolidFilledRect(x - 1, 53, 12, 11);
-      lcdDrawText(x, 55, spoolNames[index], INVERS);
-    } else {
-      lcdDrawText(x, 55, spoolNames[index]);
+  if (csuMode) {
+    lcdDrawText(66, 55, "SP");
+    for (uint8_t index = 0; index < 3; index++) {
+      coord_t x = 80 + index * 14;
+      if (index == spool) {
+        lcdDrawSolidFilledRect(x - 1, 53, 12, 11);
+        lcdDrawText(x, 55, spoolNames[index], INVERS);
+      } else {
+        lcdDrawText(x, 55, spoolNames[index]);
+      }
     }
+  } else {
+    lcdDrawSolidFilledRect(65, 53, 19, 11);
+    lcdDrawText(66, 55, "SP", INVERS);
   }
 }
 
