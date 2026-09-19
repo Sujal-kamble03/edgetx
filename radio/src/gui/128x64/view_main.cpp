@@ -332,8 +332,60 @@ enum DashboardDirection : uint8_t {
   DASHBOARD_CW,
 };
 
+static bool dashboardDirectionPending = false;
+static bool dashboardModeInitialized = false;
+static bool dashboardLastCsuMode = false;
+static bool dashboardTransitionScWentAway = false;
+
+static void drawDashboardTransitionPrompt(bool csuMode)
+{
+  const coord_t boxWidth = LCD_W - 8;
+  const coord_t boxHeight = 25;
+  const coord_t boxX = (LCD_W - boxWidth) / 2;
+  const coord_t boxY = (LCD_H - boxHeight) / 2;
+
+  lcdClear();
+  lcdDrawRect(boxX, boxY, boxWidth, boxHeight);
+  lcdDrawText(LCD_W / 2, boxY + 4, csuMode ? "CSU MODE" : "MU MODE", CENTERED);
+  lcdDrawText(LCD_W / 2, boxY + 14, "SET SC HIGH", CENTERED);
+}
+
+static void updateDashboardModeState()
+{
+  const int8_t se = switchGetIndexFromName("SE");
+  const int8_t sc = switchGetIndexFromName("SC");
+  const bool csuMode = se >= 0 && switchGetPosition(se) == SWITCH_HW_UP;
+  const SwitchHwPos scPosition = sc >= 0 ? switchGetPosition(sc) : SWITCH_HW_MID;
+
+  if (!dashboardModeInitialized) {
+    dashboardLastCsuMode = csuMode;
+    dashboardModeInitialized = true;
+  }
+  else if (csuMode != dashboardLastCsuMode) {
+    dashboardLastCsuMode = csuMode;
+    dashboardDirectionPending = true;
+    dashboardTransitionScWentAway = scPosition != SWITCH_HW_UP;
+  }
+
+  if (dashboardDirectionPending) {
+    if (scPosition != SWITCH_HW_UP) {
+      dashboardTransitionScWentAway = true;
+    }
+    else if (dashboardTransitionScWentAway) {
+      dashboardDirectionPending = false;
+    }
+  }
+}
+
 void drawCustomMainDashboard()
 {
+  updateDashboardModeState();
+
+  if (dashboardDirectionPending) {
+    drawDashboardTransitionPrompt(dashboardLastCsuMode);
+    return;
+  }
+
   const int8_t sa = switchGetIndexFromName("SA");
   const int8_t sc = switchGetIndexFromName("SC");
   const int8_t sd = switchGetIndexFromName("SD");
@@ -356,18 +408,42 @@ void drawCustomMainDashboard()
       sbPosition == SWITCH_HW_UP;
     const bool muReadySbLow = !csuMode && driveReady &&
       sbPosition == SWITCH_HW_DOWN;
-      const bool muReadyScLow = !csuMode && driveReady && sc >= 0 &&
-        switchGetPosition(sc) == SWITCH_HW_DOWN;
+      const bool muReadyScHigh = !csuMode && driveReady && sc >= 0 &&
+        switchGetPosition(sc) == SWITCH_HW_UP;
+      static bool dashboardSwitchesInitialized = false;
+      static SwitchHwPos lastSbPosition = SWITCH_HW_MID;
+      static SwitchHwPos lastScPosition = SWITCH_HW_MID;
+      static int8_t lastDashboardSwitch = -1;
+      const SwitchHwPos scPosition = sc >= 0 ? switchGetPosition(sc) : SWITCH_HW_MID;
+      if (!dashboardSwitchesInitialized) {
+        lastSbPosition = sbPosition;
+        lastScPosition = scPosition;
+        dashboardSwitchesInitialized = true;
+      } else {
+        if (sbPosition != lastSbPosition) {
+          lastDashboardSwitch = sb;
+          lastSbPosition = sbPosition;
+        }
+        if (scPosition != lastScPosition) {
+          lastDashboardSwitch = sc;
+          lastScPosition = scPosition;
+        }
+      }
+      const bool sbWasLastMoved = lastDashboardSwitch == sb;
+      const bool scWasLastMoved = lastDashboardSwitch == sc;
+  const bool dashboardDfOn = scWasLastMoved && dfOn;
   const DashboardDirection direction =
-      muReadySbHigh && ele > 15 ? DASHBOARD_FORWARD :
-      muReadySbHigh && ele < -15 ? DASHBOARD_BACK :
-        muReadyScLow && ele > 15 ? DASHBOARD_CW :
-        muReadyScLow && ele < -15 ? DASHBOARD_CCW :
-      muReadySbLow && ail > 15 ? DASHBOARD_RIGHT : DASHBOARD_LEFT;
+          sbWasLastMoved && muReadySbHigh && ele > 15 ? DASHBOARD_FORWARD :
+          sbWasLastMoved && muReadySbHigh && ele < -15 ? DASHBOARD_BACK :
+            scWasLastMoved && muReadyScHigh && ele > 15 ? DASHBOARD_CW :
+            scWasLastMoved && muReadyScHigh && ele < -15 ? DASHBOARD_CCW :
+          sbWasLastMoved && muReadySbLow && ail > 15 ?
+            DASHBOARD_RIGHT : DASHBOARD_LEFT;
     const bool directionalBox =
-      (muReadySbHigh && (ele > 15 || ele < -15)) ||
-        (muReadyScLow && (ele > 15 || ele < -15)) ||
-      (!muReadyScLow && muReadySbLow && (ail > 15 || ail < -15));
+          (sbWasLastMoved && muReadySbHigh && (ele > 15 || ele < -15)) ||
+            (scWasLastMoved && muReadyScHigh && (ele > 15 || ele < -15)) ||
+          (sbWasLastMoved && muReadySbLow &&
+           (ail > 15 || ail < -15));
   const bool linked = true;
 
   lcdDrawText(1, 0, "S3C2MU");
@@ -404,7 +480,7 @@ void drawCustomMainDashboard()
   }
 
   lcdDrawText(2, 55, "DF");
-  if (dfOn) {
+  if (dashboardDfOn) {
     lcdDrawSolidFilledRect(40, 53, 23, 11);
     lcdDrawText(51, 55, "ON", CENTERED | INVERS);
   } else {
@@ -424,11 +500,11 @@ void drawCustomMainDashboard()
     coord_t cellX = columns[cellColumns[index]];
     coord_t cellY = rows[cellRows[index]];
     uint8_t size = sizes[index];
-    const bool verticalBox = muReadySbHigh &&
+    const bool verticalBox = sbWasLastMoved && muReadySbHigh &&
         (index == DASHBOARD_FORWARD || index == DASHBOARD_BACK);
-    const bool lowNeutralBox = muReadySbLow && !directionalBox &&
-      !muReadyScLow && (index == DASHBOARD_LEFT || index == DASHBOARD_RIGHT);
-    const bool rotateBox = muReadyScLow && !directionalBox &&
+    const bool lowNeutralBox = sbWasLastMoved && muReadySbLow && !directionalBox &&
+      (index == DASHBOARD_LEFT || index == DASHBOARD_RIGHT);
+    const bool rotateBox = scWasLastMoved && muReadyScHigh && !directionalBox &&
         (index == DASHBOARD_CCW || index == DASHBOARD_CW);
     const bool pairedBox =
         (verticalBox || lowNeutralBox || rotateBox) && !directionalBox;
@@ -527,6 +603,12 @@ void menuMainView(event_t event)
 {
   uint8_t view = g_eeGeneral.view;
   uint8_t view_base = view & 0x0f;
+
+  updateDashboardModeState();
+  if (dashboardDirectionPending) {
+    drawCustomMainDashboard();
+    return;
+  }
 
   switch (event) {
     case EVT_ENTRY:
