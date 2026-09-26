@@ -106,7 +106,7 @@ bool bluetoothRawUartInit(uint32_t baudrate)
   etx_serial_init cfg = {
     .baudrate = baudrate,
     .encoding = ETX_Encoding_8N1,
-    .direction = ETX_Dir_TX,
+    .direction = ETX_Dir_TX_RX,
     .polarity = ETX_Pol_Normal,
   };
 

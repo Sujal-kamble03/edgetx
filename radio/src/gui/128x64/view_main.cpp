@@ -25,6 +25,7 @@
 
 #include "switches.h"
 #include "input_mapping.h"
+#include "pulses/raw_uart.h"
 
 #define BIGSIZE       DBLSIZE
 #if defined (PCBTARANIS)
@@ -347,7 +348,20 @@ static void drawDashboardTransitionPrompt(bool csuMode)
   lcdClear();
   lcdDrawRect(boxX, boxY, boxWidth, boxHeight);
   lcdDrawText(LCD_W / 2, boxY + 4, csuMode ? "CSU MODE" : "MU MODE", CENTERED);
-  lcdDrawText(LCD_W / 2, boxY + 14, "SET SC HIGH", CENTERED);
+  lcdDrawText(LCD_W / 2, boxY + 14, "DO CW AND USE SAME SWITCH FOR SPOOL SELECT", CENTERED);
+}
+
+static void drawEstopPrompt(const char* line1, const char* line2)
+{
+  const coord_t boxWidth = LCD_W - 8;
+  const coord_t boxHeight = 25;
+  const coord_t boxX = (LCD_W - boxWidth) / 2;
+  const coord_t boxY = (LCD_H - boxHeight) / 2;
+
+  lcdClear();
+  lcdDrawRect(boxX, boxY, boxWidth, boxHeight);
+  lcdDrawText(LCD_W / 2, boxY + 4, line1, CENTERED | INVERS);
+  lcdDrawText(LCD_W / 2, boxY + 14, line2, CENTERED);
 }
 
 static void updateDashboardModeState()
@@ -381,6 +395,20 @@ void drawCustomMainDashboard()
 {
   updateDashboardModeState();
 
+  switch (rawUartGetEstopState()) {
+    case RAW_UART_ESTOP_PRESSED:
+      drawEstopPrompt("E-STOP ACTIVE", "RELEASE E-STOP");
+      return;
+    case RAW_UART_ESTOP_WAIT_DISARM:
+      drawEstopPrompt("E-STOP RELEASED", "DO DISARM");
+      return;
+    case RAW_UART_ESTOP_WAIT_ARM:
+      drawEstopPrompt("E-STOP RELEASED", "DO ARM");
+      return;
+    default:
+      break;
+  }
+
   if (dashboardDirectionPending) {
     drawDashboardTransitionPrompt(dashboardLastCsuMode);
     return;
@@ -403,7 +431,6 @@ void drawCustomMainDashboard()
   const bool dfOn = !csuMode && sc >= 0 && switchGetPosition(sc) == SWITCH_HW_DOWN;
   const SwitchHwPos sbPosition = sb >= 0 ? switchGetPosition(sb) : SWITCH_HW_MID;
   const int ele = getValue(MIXSRC_FIRST_STICK + 1);
-    const int ail = getValue(MIXSRC_FIRST_STICK + 3);
   const bool muReadySbHigh = !csuMode && driveReady &&
       sbPosition == SWITCH_HW_UP;
     const bool muReadySbLow = !csuMode && driveReady &&
@@ -437,13 +464,13 @@ void drawCustomMainDashboard()
           sbWasLastMoved && muReadySbHigh && ele < -15 ? DASHBOARD_BACK :
             scWasLastMoved && muReadyScHigh && ele > 15 ? DASHBOARD_CW :
             scWasLastMoved && muReadyScHigh && ele < -15 ? DASHBOARD_CCW :
-          sbWasLastMoved && muReadySbLow && ail > 15 ?
+          sbWasLastMoved && muReadySbLow && ele > 15 ?
             DASHBOARD_RIGHT : DASHBOARD_LEFT;
     const bool directionalBox =
           (sbWasLastMoved && muReadySbHigh && (ele > 15 || ele < -15)) ||
             (scWasLastMoved && muReadyScHigh && (ele > 15 || ele < -15)) ||
           (sbWasLastMoved && muReadySbLow &&
-           (ail > 15 || ail < -15));
+           (ele > 15 || ele < -15));
   const bool linked = true;
 
   lcdDrawText(1, 0, "S3C2MU");

@@ -18,11 +18,13 @@
 #define RAW_UART_FRAME_MARKER 0xA5
 #define RAW_UART_CHANNELS 16
 #define RAW_UART_PERIOD 20000
+#define RAW_UART_ESTOP_MARKER 0x5A
+#define RAW_UART_ESTOP_TIMEOUT 30
 
 static const etx_serial_init rawUartParams = {
   .baudrate = RAW_UART_BAUDRATE,
   .encoding = ETX_Encoding_8N1,
-  .direction = ETX_Dir_TX,
+  .direction = ETX_Dir_TX_RX,
   .polarity = ETX_Pol_Normal,
 };
 
@@ -31,8 +33,46 @@ static uint8_t rawUartContext;
 static uint8_t rawUartModule;
 #endif
 
+static uint8_t estopParserState = 0;
+static uint8_t estopReceivedState = RAW_UART_ESTOP_NO_LINK;
+static uint8_t estopState = RAW_UART_ESTOP_NO_LINK;
+static tmr10ms_t estopLastRx = 0;
+
+static void rawUartParseByte(uint8_t byte)
+{
+  if (estopParserState == 0) {
+    if (byte == RAW_UART_ESTOP_MARKER) estopParserState = 1;
+    return;
+  }
+
+  if (estopParserState == 1) {
+    estopReceivedState = byte;
+    estopParserState = 2;
+    return;
+  }
+
+  estopParserState = 0;
+  if (estopReceivedState <= RAW_UART_ESTOP_WAIT_ARM &&
+      byte == (uint8_t)(RAW_UART_ESTOP_MARKER ^ estopReceivedState)) {
+    estopState = estopReceivedState;
+    estopLastRx = get_tmr10ms();
+  }
+}
+
+uint8_t rawUartGetEstopState()
+{
+  if (estopState == RAW_UART_ESTOP_NO_LINK ||
+      (tmr10ms_t)(get_tmr10ms() - estopLastRx) > RAW_UART_ESTOP_TIMEOUT)
+    return RAW_UART_ESTOP_NO_LINK;
+
+  return estopState;
+}
+
 static void* rawUartInit(uint8_t module)
 {
+  estopParserState = 0;
+  estopState = RAW_UART_ESTOP_NO_LINK;
+  estopLastRx = 0;
 #if defined(RADIO_BOXER) && defined(BLUETOOTH)
   rawUartModule = module;
   if (!bluetoothRawUartInit(RAW_UART_BAUDRATE)) return nullptr;
@@ -54,6 +94,8 @@ static void* rawUartInit(uint8_t module)
 
 static void rawUartDeInit(void* ctx)
 {
+  estopParserState = 0;
+  estopState = RAW_UART_ESTOP_NO_LINK;
 #if defined(RADIO_BOXER) && defined(BLUETOOTH)
   (void)ctx;
   bluetoothRawUartDeInit();
@@ -64,16 +106,26 @@ static void rawUartDeInit(void* ctx)
 
 static void rawUartSendPulses(void* ctx, uint8_t* buffer, int16_t*, uint8_t)
 {
+  uint8_t receivedByte;
 #if defined(RADIO_BOXER) && defined(BLUETOOTH)
   (void)ctx;
   auto module = rawUartModule;
   auto p_buf = buffer;
+
+  while (bluetoothRead(&receivedByte) > 0) rawUartParseByte(receivedByte);
 #else
   auto mod_st = (etx_module_state_t*)ctx;
   auto module = modulePortGetModule(mod_st);
   auto drv = modulePortGetSerialDrv(mod_st->tx);
   auto drv_ctx = modulePortGetCtx(mod_st->tx);
   auto p_buf = buffer;
+
+  auto rx_drv = modulePortGetSerialDrv(mod_st->rx);
+  auto rx_ctx = modulePortGetCtx(mod_st->rx);
+  if (rx_drv && rx_drv->getByte) {
+    while (rx_drv->getByte(rx_ctx, &receivedByte) > 0)
+      rawUartParseByte(receivedByte);
+  }
 #endif
 
   *p_buf++ = RAW_UART_FRAME_MARKER;

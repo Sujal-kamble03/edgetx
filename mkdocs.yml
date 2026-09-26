@@ -94,6 +94,7 @@ nav:
     - Code Generation: development/code-generation.md
     - Control Inputs: development/control-inputs.md
     - External Module Protocols: development/external-module-protocols.md
+    - 128x64 Main Display: development/128x64-main-display.md
     - YAML Parser/Generator: development/yaml-parser-generator.md
     - Mixer Synchronisation: development/mixer-synchronisation.md
 
