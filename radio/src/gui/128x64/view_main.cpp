@@ -337,18 +337,29 @@ static bool dashboardDirectionPending = false;
 static bool dashboardModeInitialized = false;
 static bool dashboardLastCsuMode = false;
 static bool dashboardTransitionScWentAway = false;
+static bool dashboardTransitionTimed = false;
+static bool dashboardTransitionModeOnly = false;
+static tmr10ms_t dashboardTransitionStartTime = 0;
 
 static void drawDashboardTransitionPrompt(bool csuMode)
 {
   const coord_t boxWidth = LCD_W - 8;
-  const coord_t boxHeight = 25;
+  const coord_t boxHeight = dashboardTransitionModeOnly ? 25 : 43;
   const coord_t boxX = (LCD_W - boxWidth) / 2;
   const coord_t boxY = (LCD_H - boxHeight) / 2;
 
   lcdClear();
   lcdDrawRect(boxX, boxY, boxWidth, boxHeight);
-  lcdDrawText(LCD_W / 2, boxY + 4, csuMode ? "CSU MODE" : "MU MODE", CENTERED);
-  lcdDrawText(LCD_W / 2, boxY + 14, "DO CW AND USE SAME SWITCH FOR SPOOL SELECT", CENTERED);
+  if (dashboardTransitionModeOnly) {
+    lcdDrawText(LCD_W / 2, boxY + 4, "CHANGING MODE", CENTERED);
+    lcdDrawText(LCD_W / 2, boxY + 14, csuMode ? "CSU MODE" : "MU MODE", CENTERED);
+    return;
+  }
+
+  lcdDrawText(LCD_W / 2, boxY + 3, csuMode ? "CSU MODE" : "MU MODE", CENTERED);
+  lcdDrawText(LCD_W / 2, boxY + 13, "DO CW AND USE", CENTERED);
+  lcdDrawText(LCD_W / 2, boxY + 23, "SAME SWITCH FOR", CENTERED);
+  lcdDrawText(LCD_W / 2, boxY + 33, "SPOOL SELECT", CENTERED);
 }
 
 static void drawEstopPrompt(const char* line1, const char* line2)
@@ -376,17 +387,34 @@ static void updateDashboardModeState()
     dashboardModeInitialized = true;
   }
   else if (csuMode != dashboardLastCsuMode) {
+    const bool enteringCsuMode = csuMode;
     dashboardLastCsuMode = csuMode;
     dashboardDirectionPending = true;
     dashboardTransitionScWentAway = scPosition != SWITCH_HW_UP;
+    dashboardTransitionModeOnly = !enteringCsuMode;
+    dashboardTransitionTimed = dashboardTransitionModeOnly ||
+        scPosition == SWITCH_HW_UP;
+    if (dashboardTransitionTimed) {
+      dashboardTransitionStartTime = get_tmr10ms();
+    }
   }
 
   if (dashboardDirectionPending) {
-    if (scPosition != SWITCH_HW_UP) {
-      dashboardTransitionScWentAway = true;
+    if (dashboardTransitionTimed) {
+      if ((tmr10ms_t)(get_tmr10ms() - dashboardTransitionStartTime) >= 200) {
+        dashboardDirectionPending = false;
+        dashboardTransitionTimed = false;
+        dashboardTransitionModeOnly = false;
+      }
     }
-    else if (dashboardTransitionScWentAway) {
-      dashboardDirectionPending = false;
+    else {
+      if (scPosition != SWITCH_HW_UP) {
+        dashboardTransitionScWentAway = true;
+      }
+      else if (dashboardTransitionScWentAway) {
+        dashboardDirectionPending = false;
+        dashboardTransitionModeOnly = false;
+      }
     }
   }
 }
@@ -409,12 +437,18 @@ void drawCustomMainDashboard()
       break;
   }
 
+  const int8_t sa = switchGetIndexFromName("SA");
+  if (sa >= 0 && switchGetPosition(sa) == SWITCH_HW_DOWN) {
+    lcdClear();
+    lcdDrawText(LCD_W / 2, LCD_H / 2 - FH / 2, "DISARM", CENTERED);
+    return;
+  }
+
   if (dashboardDirectionPending) {
     drawDashboardTransitionPrompt(dashboardLastCsuMode);
     return;
   }
 
-  const int8_t sa = switchGetIndexFromName("SA");
   const int8_t sc = switchGetIndexFromName("SC");
   const int8_t sd = switchGetIndexFromName("SD");
   const int8_t se = switchGetIndexFromName("SE");
@@ -495,7 +529,7 @@ void drawCustomMainDashboard()
   lcdDrawText(2, 36, "MODE");
   lcdDrawText(41, 36, modeText);
 
-  lcdDrawText(2, 46, "SPD");
+  lcdDrawText(2, 46, "ANG");
   for (uint8_t index = 0; index < 10; index++) {
     coord_t x = 22 + index * 4;
     if (index < speed)
@@ -630,6 +664,12 @@ void menuMainView(event_t event)
 {
   uint8_t view = g_eeGeneral.view;
   uint8_t view_base = view & 0x0f;
+
+  const int8_t sa = switchGetIndexFromName("SA");
+  if (sa >= 0 && switchGetPosition(sa) == SWITCH_HW_DOWN) {
+    drawCustomMainDashboard();
+    return;
+  }
 
   updateDashboardModeState();
   if (dashboardDirectionPending) {
