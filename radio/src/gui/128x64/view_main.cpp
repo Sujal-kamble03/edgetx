@@ -336,6 +336,11 @@ enum DashboardDirection : uint8_t {
 static bool dashboardDirectionPending = false;
 static bool dashboardModeInitialized = false;
 static bool dashboardLastCsuMode = false;
+static bool dashboardObservedCsuMode = false;
+static bool dashboardSwitchesInitialized = false;
+static int8_t dashboardLastMovedSwitch = -1;
+static int8_t dashboardLastDashboardSwitch = -1;
+static SwitchHwPos dashboardSwitchPositions[MAX_SWITCHES];
 static bool dashboardTransitionScWentAway = false;
 static bool dashboardTransitionTimed = false;
 static bool dashboardTransitionModeOnly = false;
@@ -379,23 +384,73 @@ static void updateDashboardModeState()
 {
   const int8_t se = switchGetIndexFromName("SE");
   const int8_t sc = switchGetIndexFromName("SC");
-  const bool csuMode = se >= 0 && switchGetPosition(se) == SWITCH_HW_UP;
+  const int8_t sb = switchGetIndexFromName("SB");
   const SwitchHwPos scPosition = sc >= 0 ? switchGetPosition(sc) : SWITCH_HW_MID;
+  const bool csuMode = se >= 0 && switchGetPosition(se) == SWITCH_HW_UP;
+  const uint8_t switchCount = switchGetMaxSwitches();
+
+  if (!dashboardSwitchesInitialized) {
+    for (uint8_t index = 0; index < switchCount; index++) {
+      dashboardSwitchPositions[index] = switchGetPosition(index);
+    }
+    dashboardSwitchesInitialized = true;
+  }
+  else {
+    int8_t changedSwitch = -1;
+    bool multipleSwitchesChanged = false;
+    bool sbChanged = false;
+    bool scChanged = false;
+    bool seChanged = false;
+    for (uint8_t index = 0; index < switchCount; index++) {
+      const SwitchHwPos position = switchGetPosition(index);
+      if (position != dashboardSwitchPositions[index]) {
+        dashboardSwitchPositions[index] = position;
+        if (index == se) {
+          seChanged = true;
+          continue;
+        }
+        if (changedSwitch >= 0) {
+          multipleSwitchesChanged = true;
+        }
+        changedSwitch = index;
+        sbChanged |= index == sb;
+        scChanged |= index == sc;
+      }
+    }
+    multipleSwitchesChanged |= seChanged && changedSwitch >= 0;
+    if (multipleSwitchesChanged) {
+      dashboardLastMovedSwitch = -1;
+    }
+    else if (changedSwitch >= 0) {
+      dashboardLastMovedSwitch = changedSwitch;
+    }
+    if (sbChanged) {
+      dashboardLastDashboardSwitch = sb;
+    }
+    if (scChanged) {
+      dashboardLastDashboardSwitch = sc;
+    }
+  }
 
   if (!dashboardModeInitialized) {
     dashboardLastCsuMode = csuMode;
+    dashboardObservedCsuMode = csuMode;
     dashboardModeInitialized = true;
-  }
-  else if (csuMode != dashboardLastCsuMode) {
+  } else if (csuMode != dashboardObservedCsuMode) {
     const bool enteringCsuMode = csuMode;
-    dashboardLastCsuMode = csuMode;
-    dashboardDirectionPending = true;
-    dashboardTransitionScWentAway = scPosition != SWITCH_HW_UP;
-    dashboardTransitionModeOnly = !enteringCsuMode;
-    dashboardTransitionTimed = dashboardTransitionModeOnly ||
-        scPosition == SWITCH_HW_UP;
-    if (dashboardTransitionTimed) {
-      dashboardTransitionStartTime = get_tmr10ms();
+    dashboardObservedCsuMode = csuMode;
+    if (enteringCsuMode || dashboardLastCsuMode) {
+      if (!enteringCsuMode) {
+        dashboardLastCsuMode = csuMode;
+        dashboardLastDashboardSwitch = -1;
+      }
+      dashboardDirectionPending = true;
+      dashboardTransitionScWentAway = scPosition != SWITCH_HW_UP;
+      dashboardTransitionModeOnly = !enteringCsuMode;
+      dashboardTransitionTimed = dashboardTransitionModeOnly;
+      if (dashboardTransitionTimed) {
+        dashboardTransitionStartTime = get_tmr10ms();
+      }
     }
   }
 
@@ -414,6 +469,7 @@ static void updateDashboardModeState()
       else if (dashboardTransitionScWentAway) {
         dashboardDirectionPending = false;
         dashboardTransitionModeOnly = false;
+        dashboardLastCsuMode = dashboardObservedCsuMode;
       }
     }
   }
@@ -445,18 +501,17 @@ void drawCustomMainDashboard()
   }
 
   if (dashboardDirectionPending) {
-    drawDashboardTransitionPrompt(dashboardLastCsuMode);
+    drawDashboardTransitionPrompt(dashboardObservedCsuMode);
     return;
   }
 
   const int8_t sc = switchGetIndexFromName("SC");
   const int8_t sd = switchGetIndexFromName("SD");
-  const int8_t se = switchGetIndexFromName("SE");
   const int8_t sb = switchGetIndexFromName("SB");
 
   const bool armed = sa >= 0 && switchGetPosition(sa) == SWITCH_HW_UP;
   const bool driveReady = sd >= 0 && switchGetPosition(sd) == SWITCH_HW_UP;
-  const bool csuMode = se >= 0 && switchGetPosition(se) == SWITCH_HW_UP;
+  const bool csuMode = dashboardLastCsuMode;
   const char* driveText = driveReady ? "  RDY" : "NORDY";
   const char* modeText =
       csuMode ? "CSU" : "MU";
@@ -471,27 +526,8 @@ void drawCustomMainDashboard()
       sbPosition == SWITCH_HW_DOWN;
       const bool muReadyScHigh = !csuMode && driveReady && sc >= 0 &&
         switchGetPosition(sc) == SWITCH_HW_UP;
-      static bool dashboardSwitchesInitialized = false;
-      static SwitchHwPos lastSbPosition = SWITCH_HW_MID;
-      static SwitchHwPos lastScPosition = SWITCH_HW_MID;
-      static int8_t lastDashboardSwitch = -1;
-      const SwitchHwPos scPosition = sc >= 0 ? switchGetPosition(sc) : SWITCH_HW_MID;
-      if (!dashboardSwitchesInitialized) {
-        lastSbPosition = sbPosition;
-        lastScPosition = scPosition;
-        dashboardSwitchesInitialized = true;
-      } else {
-        if (sbPosition != lastSbPosition) {
-          lastDashboardSwitch = sb;
-          lastSbPosition = sbPosition;
-        }
-        if (scPosition != lastScPosition) {
-          lastDashboardSwitch = sc;
-          lastScPosition = scPosition;
-        }
-      }
-      const bool sbWasLastMoved = lastDashboardSwitch == sb;
-      const bool scWasLastMoved = lastDashboardSwitch == sc;
+      const bool sbWasLastMoved = dashboardLastDashboardSwitch == sb;
+      const bool scWasLastMoved = dashboardLastDashboardSwitch == sc;
   const bool dashboardDfOn = scWasLastMoved && dfOn;
   const DashboardDirection direction =
           sbWasLastMoved && muReadySbHigh && ele > 15 ? DASHBOARD_FORWARD :
