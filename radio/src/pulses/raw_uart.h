@@ -19,3 +19,7 @@ enum RawUartEstop : uint8_t {
 };
 
 uint8_t rawUartGetEstopState();
+
+#define RAW_UART_SOC_UNKNOWN 0xFF
+bool rawUartPlcConnected();
+uint8_t rawUartGetBatterySoc();

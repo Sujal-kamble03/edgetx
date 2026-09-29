@@ -342,29 +342,19 @@ static int8_t dashboardLastMovedSwitch = -1;
 static int8_t dashboardLastDashboardSwitch = -1;
 static SwitchHwPos dashboardSwitchPositions[MAX_SWITCHES];
 static bool dashboardTransitionScWentAway = false;
-static bool dashboardTransitionTimed = false;
-static bool dashboardTransitionModeOnly = false;
-static tmr10ms_t dashboardTransitionStartTime = 0;
 
 static void drawDashboardTransitionPrompt(bool csuMode)
 {
   const coord_t boxWidth = LCD_W - 8;
-  const coord_t boxHeight = dashboardTransitionModeOnly ? 25 : 43;
+  const coord_t boxHeight = 43;
   const coord_t boxX = (LCD_W - boxWidth) / 2;
   const coord_t boxY = (LCD_H - boxHeight) / 2;
 
   lcdClear();
   lcdDrawRect(boxX, boxY, boxWidth, boxHeight);
-  if (dashboardTransitionModeOnly) {
-    lcdDrawText(LCD_W / 2, boxY + 4, "CHANGING MODE", CENTERED);
-    lcdDrawText(LCD_W / 2, boxY + 14, csuMode ? "CSU MODE" : "MU MODE", CENTERED);
-    return;
-  }
-
   lcdDrawText(LCD_W / 2, boxY + 3, csuMode ? "CSU MODE" : "MU MODE", CENTERED);
-  lcdDrawText(LCD_W / 2, boxY + 13, "DO CW AND USE", CENTERED);
-  lcdDrawText(LCD_W / 2, boxY + 23, "SAME SWITCH FOR", CENTERED);
-  lcdDrawText(LCD_W / 2, boxY + 33, "SPOOL SELECT", CENTERED);
+  lcdDrawText(LCD_W / 2, boxY + 13, "MOVE SC TO CW", CENTERED);
+  lcdDrawText(LCD_W / 2, boxY + 23, "TO SELECT SPOOL", CENTERED);
 }
 
 static void drawEstopPrompt(const char* line1, const char* line2)
@@ -439,45 +429,40 @@ static void updateDashboardModeState()
   } else if (csuMode != dashboardObservedCsuMode) {
     const bool enteringCsuMode = csuMode;
     dashboardObservedCsuMode = csuMode;
-    if (enteringCsuMode || dashboardLastCsuMode) {
-      if (!enteringCsuMode) {
-        dashboardLastCsuMode = csuMode;
-        dashboardLastDashboardSwitch = -1;
+    if (enteringCsuMode) {
+      if (scPosition == SWITCH_HW_UP && dashboardLastDashboardSwitch != sb) {
+        dashboardLastCsuMode = true;
+        dashboardDirectionPending = false;
+      } else {
+        dashboardDirectionPending = true;
+        dashboardTransitionScWentAway = scPosition != SWITCH_HW_UP;
       }
-      dashboardDirectionPending = true;
-      dashboardTransitionScWentAway = scPosition != SWITCH_HW_UP;
-      dashboardTransitionModeOnly = !enteringCsuMode;
-      dashboardTransitionTimed = dashboardTransitionModeOnly;
-      if (dashboardTransitionTimed) {
-        dashboardTransitionStartTime = get_tmr10ms();
-      }
+    } else {
+      dashboardLastCsuMode = false;
+      dashboardLastDashboardSwitch = -1;
+      dashboardDirectionPending = false;
+      dashboardTransitionScWentAway = false;
     }
   }
 
   if (dashboardDirectionPending) {
-    if (dashboardTransitionTimed) {
-      if ((tmr10ms_t)(get_tmr10ms() - dashboardTransitionStartTime) >= 200) {
-        dashboardDirectionPending = false;
-        dashboardTransitionTimed = false;
-        dashboardTransitionModeOnly = false;
-      }
+    if (scPosition != SWITCH_HW_UP) {
+      dashboardTransitionScWentAway = true;
     }
-    else {
-      if (scPosition != SWITCH_HW_UP) {
-        dashboardTransitionScWentAway = true;
-      }
-      else if (dashboardTransitionScWentAway) {
-        dashboardDirectionPending = false;
-        dashboardTransitionModeOnly = false;
-        dashboardLastCsuMode = dashboardObservedCsuMode;
-      }
+    else if (dashboardTransitionScWentAway) {
+      dashboardDirectionPending = false;
+      dashboardLastCsuMode = dashboardObservedCsuMode;
     }
   }
 }
 
 void drawCustomMainDashboard()
 {
-  updateDashboardModeState();
+  static pixel_t dashboardFrozenFrame[DISPLAY_BUFFER_SIZE];
+  static bool dashboardFrozenFrameValid = false;
+  const bool linked = rawUartPlcConnected();
+
+  if (linked) updateDashboardModeState();
 
   switch (rawUartGetEstopState()) {
     case RAW_UART_ESTOP_PRESSED:
@@ -500,7 +485,19 @@ void drawCustomMainDashboard()
     return;
   }
 
-  if (dashboardDirectionPending) {
+  const bool armed = sa >= 0 && switchGetPosition(sa) == SWITCH_HW_UP;
+  if (!linked && dashboardFrozenFrameValid) {
+    for (uint16_t index = 0; index < DISPLAY_BUFFER_SIZE; index++) {
+      displayBuf[index] = dashboardFrozenFrame[index];
+    }
+    lcdDrawFilledRect(1, 11, 62, 11, SOLID, ERASE);
+    if (armed) lcdDrawSolidFilledRect(1, 11, 62, 11);
+    lcdDrawText(32, 13, armed ? "ARMED" : "DISARM",
+                CENTERED | (armed ? INVERS : 0));
+    return;
+  }
+
+  if (linked && dashboardDirectionPending) {
     drawDashboardTransitionPrompt(dashboardObservedCsuMode);
     return;
   }
@@ -509,7 +506,6 @@ void drawCustomMainDashboard()
   const int8_t sd = switchGetIndexFromName("SD");
   const int8_t sb = switchGetIndexFromName("SB");
 
-  const bool armed = sa >= 0 && switchGetPosition(sa) == SWITCH_HW_UP;
   const bool driveReady = sd >= 0 && switchGetPosition(sd) == SWITCH_HW_UP;
   const bool csuMode = dashboardLastCsuMode;
   const char* driveText = driveReady ? "  RDY" : "NORDY";
@@ -541,16 +537,20 @@ void drawCustomMainDashboard()
             (scWasLastMoved && muReadyScHigh && (ele > 15 || ele < -15)) ||
           (sbWasLastMoved && muReadySbLow &&
            (ele > 15 || ele < -15));
-  const bool linked = true;
-
   lcdDrawText(1, 0, "S3C2MU");
   if (linked) drawDashboardBits(40, 2, LINK_DOT, 5, 5);
-  lcdDrawText(48, 0, linked ? "CON" : "---");
+  if (linked || BLINK_ON_PHASE) lcdDrawText(48, 0, linked ? "CON" : "---");
 
+  const uint8_t soc = rawUartGetBatterySoc();
   lcdDrawRect(87, 1, 16, 8);
   lcdDrawSolidFilledRect(103, 3, 2, 4);
-  lcdDrawSolidFilledRect(89, 3, GET_TXBATT_BARS(10), 4);
-  lcdDrawNumber(120, 0, GET_TXBATT_BARS(100), RIGHT);
+  if (soc != RAW_UART_SOC_UNKNOWN) {
+    const coord_t fill = soc * 12 / 100;
+    if (fill > 0) lcdDrawSolidFilledRect(89, 3, fill, 4);
+    lcdDrawNumber(120, 0, soc, RIGHT | (soc <= 20 ? BLINK : 0));
+  } else {
+    lcdDrawText(120, 0, "--", RIGHT);
+  }
   lcdDrawChar(122, 0, '%');
 
   lcdDrawSolidHorizontalLine(0, 9, LCD_W);
@@ -629,6 +629,11 @@ void drawCustomMainDashboard()
     lcdDrawSolidFilledRect(65, 53, 19, 11);
     lcdDrawText(66, 55, "SP", INVERS);
   }
+
+  for (uint16_t index = 0; index < DISPLAY_BUFFER_SIZE; index++) {
+    dashboardFrozenFrame[index] = displayBuf[index];
+  }
+  dashboardFrozenFrameValid = true;
 }
 
 #define displayVoltageOrAlarm() displayBattVoltage()
@@ -707,10 +712,12 @@ void menuMainView(event_t event)
     return;
   }
 
-  updateDashboardModeState();
-  if (dashboardDirectionPending) {
-    drawCustomMainDashboard();
-    return;
+  if (rawUartPlcConnected()) {
+    updateDashboardModeState();
+    if (dashboardDirectionPending && event != EVT_KEY_CONTEXT_MENU) {
+      drawCustomMainDashboard();
+      return;
+    }
   }
 
   switch (event) {

@@ -18,8 +18,10 @@
 #define RAW_UART_FRAME_MARKER 0xA5
 #define RAW_UART_CHANNELS 16
 #define RAW_UART_PERIOD 20000
-#define RAW_UART_ESTOP_MARKER 0x5A
-#define RAW_UART_ESTOP_TIMEOUT 30
+#define RAW_UART_STATUS_MARKER 0xC5
+#define RAW_UART_STATUS_SIZE 5
+#define RAW_UART_STATUS_TIMEOUT 30
+#define RAW_UART_FLAG_PLC_LINK 0x02
 
 static const etx_serial_init rawUartParams = {
   .baudrate = RAW_UART_BAUDRATE,
@@ -33,46 +35,81 @@ static uint8_t rawUartContext;
 static uint8_t rawUartModule;
 #endif
 
-static uint8_t estopParserState = 0;
-static uint8_t estopReceivedState = RAW_UART_ESTOP_NO_LINK;
-static uint8_t estopState = RAW_UART_ESTOP_NO_LINK;
-static tmr10ms_t estopLastRx = 0;
+static uint8_t statusBuf[RAW_UART_STATUS_SIZE];
+static uint8_t statusIdx = 0;
+static bool statusValid = false;
+static uint8_t statusEstop = RAW_UART_ESTOP_NO_LINK;
+static uint8_t statusFlags = 0;
+static uint8_t statusSoc = RAW_UART_SOC_UNKNOWN;
+static tmr10ms_t statusLastRx = 0;
 
-static void rawUartParseByte(uint8_t byte)
+static void rawUartParseByte(uint8_t b)
 {
-  if (estopParserState == 0) {
-    if (byte == RAW_UART_ESTOP_MARKER) estopParserState = 1;
+  if (statusIdx == 0) {
+    if (b == RAW_UART_STATUS_MARKER) {
+      statusBuf[0] = b;
+      statusIdx = 1;
+    }
     return;
   }
 
-  if (estopParserState == 1) {
-    estopReceivedState = byte;
-    estopParserState = 2;
+  statusBuf[statusIdx++] = b;
+  if (statusIdx < RAW_UART_STATUS_SIZE) return;
+
+  statusIdx = 0;
+  if (statusBuf[1] <= RAW_UART_ESTOP_WAIT_ARM && statusBuf[2] <= 3 &&
+      (statusBuf[3] <= 100 || statusBuf[3] == RAW_UART_SOC_UNKNOWN) &&
+      statusBuf[4] == (uint8_t)(statusBuf[0] ^ statusBuf[1] ^ statusBuf[2] ^
+                                statusBuf[3])) {
+    statusEstop = statusBuf[1];
+    statusFlags = statusBuf[2];
+    statusSoc = statusBuf[3];
+    statusLastRx = get_tmr10ms();
+    statusValid = true;
     return;
   }
 
-  estopParserState = 0;
-  if (estopReceivedState <= RAW_UART_ESTOP_WAIT_ARM &&
-      byte == (uint8_t)(RAW_UART_ESTOP_MARKER ^ estopReceivedState)) {
-    estopState = estopReceivedState;
-    estopLastRx = get_tmr10ms();
+  uint8_t markerIndex = 1;
+  while (markerIndex < RAW_UART_STATUS_SIZE &&
+         statusBuf[markerIndex] != RAW_UART_STATUS_MARKER) {
+    markerIndex++;
   }
+  if (markerIndex < RAW_UART_STATUS_SIZE) {
+    statusIdx = RAW_UART_STATUS_SIZE - markerIndex;
+    for (uint8_t index = 0; index < statusIdx; index++) {
+      statusBuf[index] = statusBuf[markerIndex + index];
+    }
+  }
+}
+
+static bool rawUartStatusFresh()
+{
+  return statusValid &&
+         (tmr10ms_t)(get_tmr10ms() - statusLastRx) <= RAW_UART_STATUS_TIMEOUT;
 }
 
 uint8_t rawUartGetEstopState()
 {
-  if (estopState == RAW_UART_ESTOP_NO_LINK ||
-      (tmr10ms_t)(get_tmr10ms() - estopLastRx) > RAW_UART_ESTOP_TIMEOUT)
-    return RAW_UART_ESTOP_NO_LINK;
+  return rawUartStatusFresh() ? statusEstop : RAW_UART_ESTOP_NO_LINK;
+}
 
-  return estopState;
+bool rawUartPlcConnected()
+{
+  return rawUartStatusFresh() && (statusFlags & RAW_UART_FLAG_PLC_LINK);
+}
+
+uint8_t rawUartGetBatterySoc()
+{
+  return rawUartStatusFresh() ? statusSoc : RAW_UART_SOC_UNKNOWN;
 }
 
 static void* rawUartInit(uint8_t module)
 {
-  estopParserState = 0;
-  estopState = RAW_UART_ESTOP_NO_LINK;
-  estopLastRx = 0;
+  statusIdx = 0;
+  statusValid = false;
+  statusEstop = RAW_UART_ESTOP_NO_LINK;
+  statusFlags = 0;
+  statusSoc = RAW_UART_SOC_UNKNOWN;
 #if defined(RADIO_BOXER) && defined(BLUETOOTH)
   rawUartModule = module;
   if (!bluetoothRawUartInit(RAW_UART_BAUDRATE)) return nullptr;
@@ -94,8 +131,11 @@ static void* rawUartInit(uint8_t module)
 
 static void rawUartDeInit(void* ctx)
 {
-  estopParserState = 0;
-  estopState = RAW_UART_ESTOP_NO_LINK;
+  statusIdx = 0;
+  statusValid = false;
+  statusEstop = RAW_UART_ESTOP_NO_LINK;
+  statusFlags = 0;
+  statusSoc = RAW_UART_SOC_UNKNOWN;
 #if defined(RADIO_BOXER) && defined(BLUETOOTH)
   (void)ctx;
   bluetoothRawUartDeInit();
