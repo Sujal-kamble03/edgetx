@@ -19,7 +19,7 @@
 #define RAW_UART_CHANNELS 16
 #define RAW_UART_PERIOD 20000
 #define RAW_UART_STATUS_MARKER 0xC5
-#define RAW_UART_STATUS_SIZE 5
+#define RAW_UART_STATUS_SIZE 8
 #define RAW_UART_STATUS_TIMEOUT 30
 #define RAW_UART_FLAG_PLC_LINK 0x02
 
@@ -41,6 +41,9 @@ static bool statusValid = false;
 static uint8_t statusEstop = RAW_UART_ESTOP_NO_LINK;
 static uint8_t statusFlags = 0;
 static uint8_t statusSoc = RAW_UART_SOC_UNKNOWN;
+static uint8_t statusMode = RAW_UART_MODE_UNKNOWN;
+static uint8_t statusSystem = RAW_UART_SYSTEM_UNKNOWN;
+static uint8_t statusSteering = RAW_UART_STEERING_UNKNOWN;
 static tmr10ms_t statusLastRx = 0;
 
 static void rawUartParseByte(uint8_t b)
@@ -59,11 +62,21 @@ static void rawUartParseByte(uint8_t b)
   statusIdx = 0;
   if (statusBuf[1] <= RAW_UART_ESTOP_WAIT_ARM && statusBuf[2] <= 3 &&
       (statusBuf[3] <= 100 || statusBuf[3] == RAW_UART_SOC_UNKNOWN) &&
-      statusBuf[4] == (uint8_t)(statusBuf[0] ^ statusBuf[1] ^ statusBuf[2] ^
-                                statusBuf[3])) {
+      (statusBuf[4] <= RAW_UART_MODE_GO_TO_CW ||
+       statusBuf[4] == RAW_UART_MODE_UNKNOWN) &&
+      (statusBuf[5] <= RAW_UART_SYSTEM_ESTOP ||
+       statusBuf[5] == RAW_UART_SYSTEM_UNKNOWN) &&
+      (statusBuf[6] <= RAW_UART_STEERING_ACKERMANN_LEFT ||
+       statusBuf[6] == RAW_UART_STEERING_UNKNOWN) &&
+      statusBuf[7] == (uint8_t)(statusBuf[0] ^ statusBuf[1] ^ statusBuf[2] ^
+                                statusBuf[3] ^ statusBuf[4] ^ statusBuf[5] ^
+                                statusBuf[6])) {
     statusEstop = statusBuf[1];
     statusFlags = statusBuf[2];
     statusSoc = statusBuf[3];
+    statusMode = statusBuf[4];
+    statusSystem = statusBuf[5];
+    statusSteering = statusBuf[6];
     statusLastRx = get_tmr10ms();
     statusValid = true;
     return;
@@ -103,6 +116,21 @@ uint8_t rawUartGetBatterySoc()
   return rawUartStatusFresh() ? statusSoc : RAW_UART_SOC_UNKNOWN;
 }
 
+uint8_t rawUartGetPlcModeState()
+{
+  return rawUartStatusFresh() ? statusMode : RAW_UART_MODE_UNKNOWN;
+}
+
+uint8_t rawUartGetPlcSystemState()
+{
+  return rawUartStatusFresh() ? statusSystem : RAW_UART_SYSTEM_UNKNOWN;
+}
+
+uint8_t rawUartGetPlcSteeringState()
+{
+  return rawUartStatusFresh() ? statusSteering : RAW_UART_STEERING_UNKNOWN;
+}
+
 static void* rawUartInit(uint8_t module)
 {
   statusIdx = 0;
@@ -110,6 +138,9 @@ static void* rawUartInit(uint8_t module)
   statusEstop = RAW_UART_ESTOP_NO_LINK;
   statusFlags = 0;
   statusSoc = RAW_UART_SOC_UNKNOWN;
+  statusMode = RAW_UART_MODE_UNKNOWN;
+  statusSystem = RAW_UART_SYSTEM_UNKNOWN;
+  statusSteering = RAW_UART_STEERING_UNKNOWN;
 #if defined(RADIO_BOXER) && defined(BLUETOOTH)
   rawUartModule = module;
   if (!bluetoothRawUartInit(RAW_UART_BAUDRATE)) return nullptr;
@@ -136,6 +167,9 @@ static void rawUartDeInit(void* ctx)
   statusEstop = RAW_UART_ESTOP_NO_LINK;
   statusFlags = 0;
   statusSoc = RAW_UART_SOC_UNKNOWN;
+  statusMode = RAW_UART_MODE_UNKNOWN;
+  statusSystem = RAW_UART_SYSTEM_UNKNOWN;
+  statusSteering = RAW_UART_STEERING_UNKNOWN;
 #if defined(RADIO_BOXER) && defined(BLUETOOTH)
   (void)ctx;
   bluetoothRawUartDeInit();

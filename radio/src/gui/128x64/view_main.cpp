@@ -333,17 +333,21 @@ enum DashboardDirection : uint8_t {
   DASHBOARD_CW,
 };
 
-static bool dashboardDirectionPending = false;
-static bool dashboardModeInitialized = false;
 static bool dashboardLastCsuMode = false;
-static bool dashboardObservedCsuMode = false;
+static bool dashboardModeChangePending = false;
 static bool dashboardSwitchesInitialized = false;
 static int8_t dashboardLastMovedSwitch = -1;
 static int8_t dashboardLastDashboardSwitch = -1;
-static SwitchHwPos dashboardSwitchPositions[MAX_SWITCHES];
-static bool dashboardTransitionScWentAway = false;
+enum DashboardDfState : uint8_t {
+  DASHBOARD_DF_OFF,
+  DASHBOARD_DF_ON,
+  DASHBOARD_DF_REJECTED,
+};
 
-static void drawDashboardTransitionPrompt(bool csuMode)
+static uint8_t dashboardDfState = DASHBOARD_DF_OFF;
+static SwitchHwPos dashboardSwitchPositions[MAX_SWITCHES];
+
+static void drawDashboardTransitionPrompt(bool csuMode, uint8_t plcMode)
 {
   const coord_t boxWidth = LCD_W - 8;
   const coord_t boxHeight = 43;
@@ -353,8 +357,15 @@ static void drawDashboardTransitionPrompt(bool csuMode)
   lcdClear();
   lcdDrawRect(boxX, boxY, boxWidth, boxHeight);
   lcdDrawText(LCD_W / 2, boxY + 3, csuMode ? "CSU MODE" : "MU MODE", CENTERED);
-  lcdDrawText(LCD_W / 2, boxY + 13, "MOVE SC TO CW", CENTERED);
-  lcdDrawText(LCD_W / 2, boxY + 23, "TO SELECT SPOOL", CENTERED);
+  if (plcMode == RAW_UART_MODE_UNKNOWN) {
+    lcdDrawText(LCD_W / 2, boxY + 18, "NO PLC LINK", CENTERED | INVERS);
+  } else if (plcMode == RAW_UART_MODE_GO_TO_CW) {
+    lcdDrawText(LCD_W / 2, boxY + 13, "MOVE SC TO CW", CENTERED);
+    lcdDrawText(LCD_W / 2, boxY + 23, "TO SELECT SPOOL", CENTERED);
+  } else {
+    lcdDrawText(LCD_W / 2, boxY + 13, "PLEASE WAIT", CENTERED);
+    lcdDrawText(LCD_W / 2, boxY + 23, "PLC SWITCHING", CENTERED);
+  }
 }
 
 static void drawEstopPrompt(const char* line1, const char* line2)
@@ -370,19 +381,90 @@ static void drawEstopPrompt(const char* line1, const char* line2)
   lcdDrawText(LCD_W / 2, boxY + 14, line2, CENTERED);
 }
 
+static void drawAlertPrompt(const char* text)
+{
+  const coord_t boxWidth = LCD_W - 8;
+  const coord_t boxHeight = 17;
+  const coord_t boxX = (LCD_W - boxWidth) / 2;
+  const coord_t boxY = (LCD_H - boxHeight) / 2;
+
+  lcdClear();
+  lcdDrawRect(boxX, boxY, boxWidth, boxHeight);
+  lcdDrawText(LCD_W / 2, boxY + 5, text, CENTERED | INVERS);
+}
+
+static bool dashboardPlcFault()
+{
+  return rawUartGetPlcSystemState() == RAW_UART_SYSTEM_FAULT;
+}
+
+// PLC system state ESTOP is shown the same as e-stop state PRESSED.
+static uint8_t dashboardEstopState()
+{
+  const uint8_t estop = rawUartGetEstopState();
+  if (estop == RAW_UART_ESTOP_NORMAL &&
+      rawUartGetPlcSystemState() == RAW_UART_SYSTEM_ESTOP)
+    return RAW_UART_ESTOP_PRESSED;
+  return estop;
+}
+
+// DF is accepted only if the PLC steering is already STRAIGHT or TURN when
+// SC reaches -1. A rejected request needs SC out and back to -1.
+static bool dashboardDfSteeringOk()
+{
+  const uint8_t steering = rawUartGetPlcSteeringState();
+  return steering == RAW_UART_STEERING_STRAIGHT ||
+         steering == RAW_UART_STEERING_TURN;
+}
+
+static bool dashboardDfOn()
+{
+  return dashboardDfState == DASHBOARD_DF_ON;
+}
+
+static bool dashboardDfPopup()
+{
+  return dashboardDfState == DASHBOARD_DF_REJECTED;
+}
+
+static bool dashboardSeCsu()
+{
+  const int8_t se = switchGetIndexFromName("SE");
+  return se >= 0 && switchGetPosition(se) == SWITCH_HW_UP;
+}
+
+static bool dashboardPlcModeMatchesSe()
+{
+  return rawUartGetPlcModeState() == (dashboardSeCsu() ? RAW_UART_MODE_CSU_READY
+                                                       : RAW_UART_MODE_MU_READY);
+}
+
+// Popup after an SE flip until the PLC confirms the mode SE asks for,
+// including "NO PLC LINK" while no PLC mode state is received.
+static bool dashboardModePopup()
+{
+  if (!dashboardModeChangePending) return false;
+  const uint8_t m = rawUartGetPlcModeState();
+  if (m == RAW_UART_MODE_UNKNOWN) return true;
+  if (m == RAW_UART_MODE_WAITING || m == RAW_UART_MODE_GO_TO_CW) return true;
+  // the other mode's "ready", not yet updated after an SE flip
+  return dashboardSeCsu() ? m != RAW_UART_MODE_CSU_READY
+                          : m != RAW_UART_MODE_MU_READY;
+}
+
 static void updateDashboardModeState()
 {
+  const int8_t sa = switchGetIndexFromName("SA");
   const int8_t se = switchGetIndexFromName("SE");
   const int8_t sc = switchGetIndexFromName("SC");
   const int8_t sb = switchGetIndexFromName("SB");
-  const SwitchHwPos scPosition = sc >= 0 ? switchGetPosition(sc) : SWITCH_HW_MID;
-  const bool csuMode = se >= 0 && switchGetPosition(se) == SWITCH_HW_UP;
   const uint8_t switchCount = switchGetMaxSwitches();
 
   if (!dashboardSwitchesInitialized) {
     for (uint8_t index = 0; index < switchCount; index++) {
       dashboardSwitchPositions[index] = switchGetPosition(index);
     }
+    dashboardLastCsuMode = dashboardSeCsu();
     dashboardSwitchesInitialized = true;
   }
   else {
@@ -391,10 +473,12 @@ static void updateDashboardModeState()
     bool sbChanged = false;
     bool scChanged = false;
     bool seChanged = false;
+    bool otherThanScSbChanged = false;
     for (uint8_t index = 0; index < switchCount; index++) {
       const SwitchHwPos position = switchGetPosition(index);
       if (position != dashboardSwitchPositions[index]) {
         dashboardSwitchPositions[index] = position;
+        otherThanScSbChanged |= index != sc && index != sb;
         if (index == se) {
           seChanged = true;
           continue;
@@ -417,54 +501,64 @@ static void updateDashboardModeState()
     if (sbChanged) {
       dashboardLastDashboardSwitch = sb;
     }
+    // Any other switch turns DF off. SB only turns it off once DF is on:
+    // while rejected, moving SB is how the operator gets STRAIGHT or TURN.
+    if (otherThanScSbChanged ||
+        (sbChanged && dashboardDfState == DASHBOARD_DF_ON)) {
+      dashboardDfState = DASHBOARD_DF_OFF;
+    }
     if (scChanged) {
       dashboardLastDashboardSwitch = sc;
-    }
-  }
-
-  if (!dashboardModeInitialized) {
-    dashboardLastCsuMode = csuMode;
-    dashboardObservedCsuMode = csuMode;
-    dashboardModeInitialized = true;
-  } else if (csuMode != dashboardObservedCsuMode) {
-    const bool enteringCsuMode = csuMode;
-    dashboardObservedCsuMode = csuMode;
-    if (enteringCsuMode) {
-      if (scPosition == SWITCH_HW_UP && dashboardLastDashboardSwitch != sb) {
-        dashboardLastCsuMode = true;
-        dashboardDirectionPending = false;
+      if (switchGetPosition(sc) == SWITCH_HW_DOWN) {
+        dashboardDfState = dashboardDfSteeringOk() ? DASHBOARD_DF_ON
+                                                   : DASHBOARD_DF_REJECTED;
       } else {
-        dashboardDirectionPending = true;
-        dashboardTransitionScWentAway = scPosition != SWITCH_HW_UP;
+        dashboardDfState = DASHBOARD_DF_OFF;
       }
-    } else {
-      dashboardLastCsuMode = false;
+    }
+    if (seChanged) {
       dashboardLastDashboardSwitch = -1;
-      dashboardDirectionPending = false;
-      dashboardTransitionScWentAway = false;
+      dashboardDfState = DASHBOARD_DF_OFF;
+      dashboardModeChangePending = true;
     }
   }
 
-  if (dashboardDirectionPending) {
-    if (scPosition != SWITCH_HW_UP) {
-      dashboardTransitionScWentAway = true;
-    }
-    else if (dashboardTransitionScWentAway) {
-      dashboardDirectionPending = false;
-      dashboardLastCsuMode = dashboardObservedCsuMode;
-    }
+  if (sa < 0 || switchGetPosition(sa) != SWITCH_HW_UP) {
+    dashboardLastDashboardSwitch = -1;
+    dashboardDfState = DASHBOARD_DF_OFF;
+  }
+
+  switch (rawUartGetPlcModeState()) {
+    case RAW_UART_MODE_CSU_READY:
+      dashboardLastCsuMode = true;
+      break;
+    case RAW_UART_MODE_MU_READY:
+      dashboardLastCsuMode = false;
+      break;
+    case RAW_UART_MODE_UNKNOWN:
+      dashboardLastCsuMode = dashboardSeCsu();
+      break;
+    default:
+      break;
+  }
+
+  if (dashboardLastCsuMode || sc < 0 ||
+      switchGetPosition(sc) != SWITCH_HW_DOWN) {
+    dashboardDfState = DASHBOARD_DF_OFF;
+  }
+
+  if (dashboardModeChangePending && dashboardPlcModeMatchesSe()) {
+    dashboardModeChangePending = false;
   }
 }
 
 void drawCustomMainDashboard()
 {
-  static pixel_t dashboardFrozenFrame[DISPLAY_BUFFER_SIZE];
-  static bool dashboardFrozenFrameValid = false;
   const bool linked = rawUartPlcConnected();
 
-  if (linked) updateDashboardModeState();
+  updateDashboardModeState();
 
-  switch (rawUartGetEstopState()) {
+  switch (dashboardEstopState()) {
     case RAW_UART_ESTOP_PRESSED:
       drawEstopPrompt("E-STOP ACTIVE", "RELEASE E-STOP");
       return;
@@ -478,6 +572,23 @@ void drawCustomMainDashboard()
       break;
   }
 
+  if (dashboardPlcFault()) {
+    drawAlertPrompt("FAULT OCCURED!!");
+    return;
+  }
+
+  if (dashboardModePopup()) {
+    drawDashboardTransitionPrompt(dashboardSeCsu(),
+                                  rawUartGetPlcModeState());
+    return;
+  }
+
+  if (dashboardDfPopup()) {
+    drawAlertPrompt(dashboardDfSteeringOk() ? "GO AGAIN TO DF"
+                                            : "GO F/B OR L/R!!");
+    return;
+  }
+
   const int8_t sa = switchGetIndexFromName("SA");
   if (sa >= 0 && switchGetPosition(sa) == SWITCH_HW_DOWN) {
     lcdClear();
@@ -486,22 +597,6 @@ void drawCustomMainDashboard()
   }
 
   const bool armed = sa >= 0 && switchGetPosition(sa) == SWITCH_HW_UP;
-  if (!linked && dashboardFrozenFrameValid) {
-    for (uint16_t index = 0; index < DISPLAY_BUFFER_SIZE; index++) {
-      displayBuf[index] = dashboardFrozenFrame[index];
-    }
-    lcdDrawFilledRect(1, 11, 62, 11, SOLID, ERASE);
-    if (armed) lcdDrawSolidFilledRect(1, 11, 62, 11);
-    lcdDrawText(32, 13, armed ? "ARMED" : "DISARM",
-                CENTERED | (armed ? INVERS : 0));
-    return;
-  }
-
-  if (linked && dashboardDirectionPending) {
-    drawDashboardTransitionPrompt(dashboardObservedCsuMode);
-    return;
-  }
-
   const int8_t sc = switchGetIndexFromName("SC");
   const int8_t sd = switchGetIndexFromName("SD");
   const int8_t sb = switchGetIndexFromName("SB");
@@ -513,7 +608,6 @@ void drawCustomMainDashboard()
       csuMode ? "CSU" : "MU";
   const uint8_t speed = (getValue(MIXSRC_FIRST_POT + 1) + 1024) * 10 / 2048;
   const uint8_t spool = sc >= 0 ? switchGetPosition(sc) : 1;
-  const bool dfOn = !csuMode && sc >= 0 && switchGetPosition(sc) == SWITCH_HW_DOWN;
   const SwitchHwPos sbPosition = sb >= 0 ? switchGetPosition(sb) : SWITCH_HW_MID;
   const int ele = getValue(MIXSRC_FIRST_STICK + 1);
   const bool muReadySbHigh = !csuMode && driveReady &&
@@ -524,7 +618,6 @@ void drawCustomMainDashboard()
         switchGetPosition(sc) == SWITCH_HW_UP;
       const bool sbWasLastMoved = dashboardLastDashboardSwitch == sb;
       const bool scWasLastMoved = dashboardLastDashboardSwitch == sc;
-  const bool dashboardDfOn = scWasLastMoved && dfOn;
   const DashboardDirection direction =
           sbWasLastMoved && muReadySbHigh && ele > 15 ? DASHBOARD_FORWARD :
           sbWasLastMoved && muReadySbHigh && ele < -15 ? DASHBOARD_BACK :
@@ -577,7 +670,7 @@ void drawCustomMainDashboard()
   }
 
   lcdDrawText(2, 55, "DF");
-  if (dashboardDfOn) {
+  if (dashboardDfOn()) {
     lcdDrawSolidFilledRect(40, 53, 23, 11);
     lcdDrawText(51, 55, "ON", CENTERED | INVERS);
   } else {
@@ -592,19 +685,20 @@ void drawCustomMainDashboard()
   static const uint8_t cellRows[] = {0, 1, 1, 2, 2, 2};
   static const uint16_t* glyphs[] = {
       ARROW_UP, ARROW_LEFT, ARROW_RIGHT, ARROW_DOWN, ROTATE_CCW, ROTATE_CW};
+  const uint8_t steering = rawUartGetPlcSteeringState();
 
   for (uint8_t index = 0; index < 6; index++) {
     coord_t cellX = columns[cellColumns[index]];
     coord_t cellY = rows[cellRows[index]];
     uint8_t size = sizes[index];
-    const bool verticalBox = sbWasLastMoved && muReadySbHigh &&
+    const bool verticalBox = steering == RAW_UART_STEERING_STRAIGHT &&
         (index == DASHBOARD_FORWARD || index == DASHBOARD_BACK);
-    const bool lowNeutralBox = sbWasLastMoved && muReadySbLow && !directionalBox &&
-      (index == DASHBOARD_LEFT || index == DASHBOARD_RIGHT);
-    const bool rotateBox = scWasLastMoved && muReadyScHigh && !directionalBox &&
+    const bool turnBox = steering == RAW_UART_STEERING_TURN &&
+        (index == DASHBOARD_LEFT || index == DASHBOARD_RIGHT);
+    const bool rotateBox = steering == RAW_UART_STEERING_SPIN &&
         (index == DASHBOARD_CCW || index == DASHBOARD_CW);
-    const bool pairedBox =
-        (verticalBox || lowNeutralBox || rotateBox) && !directionalBox;
+    const bool pairedBox = !directionalBox &&
+        (verticalBox || turnBox || rotateBox);
     const bool active = directionalBox ? index == direction
                        : pairedBox && BLINK_ON_PHASE;
     if (active) lcdDrawSolidFilledRect(cellX, cellY, 12, 12);
@@ -629,11 +723,6 @@ void drawCustomMainDashboard()
     lcdDrawSolidFilledRect(65, 53, 19, 11);
     lcdDrawText(66, 55, "SP", INVERS);
   }
-
-  for (uint16_t index = 0; index < DISPLAY_BUFFER_SIZE; index++) {
-    dashboardFrozenFrame[index] = displayBuf[index];
-  }
-  dashboardFrozenFrameValid = true;
 }
 
 #define displayVoltageOrAlarm() displayBattVoltage()
@@ -706,18 +795,17 @@ void menuMainView(event_t event)
   uint8_t view = g_eeGeneral.view;
   uint8_t view_base = view & 0x0f;
 
-  const int8_t sa = switchGetIndexFromName("SA");
-  if (sa >= 0 && switchGetPosition(sa) == SWITCH_HW_DOWN) {
+  updateDashboardModeState();
+  if ((dashboardPlcFault() || dashboardModePopup() || dashboardDfPopup()) &&
+      event != EVT_KEY_CONTEXT_MENU) {
     drawCustomMainDashboard();
     return;
   }
 
-  if (rawUartPlcConnected()) {
-    updateDashboardModeState();
-    if (dashboardDirectionPending && event != EVT_KEY_CONTEXT_MENU) {
-      drawCustomMainDashboard();
-      return;
-    }
+  const int8_t sa = switchGetIndexFromName("SA");
+  if (sa >= 0 && switchGetPosition(sa) == SWITCH_HW_DOWN) {
+    drawCustomMainDashboard();
+    return;
   }
 
   switch (event) {
